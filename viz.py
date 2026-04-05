@@ -9,8 +9,8 @@ INTERVAL_START = 127347136
 # Style constants
 COLOR_REF = "#888888"
 COLOR_ALT = "#E24B4A"
-COLOR_POS_DIFF = "#E24B4A"
-COLOR_NEG_DIFF = "#4A90D9"
+COLOR_POS_DIFF = "#FF6B8A"   # pink — risk allele increases signal
+COLOR_NEG_DIFF = "#4A90D9"   # blue  — risk allele decreases signal
 DARK_BG = "#0f0f0f"
 DARK_PAPER = "#1a1a1a"
 GRID_COLOR = "#2a2a2a"
@@ -34,9 +34,7 @@ def _get_x_and_slices(zoom_bp: int = 25000, bin_size: int = 32):
     half = zoom_bp
     start_bin = variant_bin - half
     end_bin = variant_bin + half
-    # x coords in genomic space, downsampled
     x_full = np.arange(INTERVAL_START + start_bin, INTERVAL_START + end_bin)
-    # downsample
     n_bins = (end_bin - start_bin) // bin_size
     trimmed = n_bins * bin_size
     x = x_full[:trimmed].reshape(n_bins, bin_size).mean(axis=1).astype(int)
@@ -62,9 +60,27 @@ def _apply_dark_theme(fig):
     return fig
 
 
+def _add_bin1_annotation(fig, x_pos, label="BIN1 gene"):
+    """Arrow annotation pointing at the BIN1 variant, placed in paper y-space."""
+    fig.add_annotation(
+        x=x_pos,
+        y=0.97,
+        xref="x",
+        yref="paper",
+        text=f"▼ {label}",
+        showarrow=False,
+        font=dict(color="#ffaa00", size=11, family="monospace"),
+        bgcolor="#1a1a1a",
+        bordercolor="#ffaa00",
+        borderwidth=1,
+        borderpad=4,
+    )
+
+
 def plot_ref_alt(variant_output, zoom_bp: int = 25000, bin_size: int = 32):
     """
-    Overlaid REF (grey) vs ALT (red) tracks for RNA-seq and DNase-seq.
+    Overlaid REF (grey dashed) vs ALT (red) tracks for RNA-seq and DNase-seq.
+    REF is dashed so it stays visible even when signals are nearly identical.
     Returns a Plotly figure.
     """
     all_tracks = RNA_TRACKS + DNASE_TRACKS
@@ -84,12 +100,16 @@ def plot_ref_alt(variant_output, zoom_bp: int = 25000, bin_size: int = 32):
     def add_track_pair(row, ref_arr, alt_arr, track_idx, show_legend):
         ref_ds = _downsample(ref_arr[:, track_idx], start_bin, end_bin, n_bins, bin_size_)
         alt_ds = _downsample(alt_arr[:, track_idx], start_bin, end_bin, n_bins, bin_size_)
+        # REF: dashed grey — visible even when nearly identical to ALT
         fig.add_trace(go.Scatter(
-            x=x, y=ref_ds, name="REF (C)", line=dict(color=COLOR_REF, width=1),
+            x=x, y=ref_ds, name="REF allele (C)",
+            line=dict(color=COLOR_REF, width=1.5, dash="dash"),
             showlegend=show_legend, legendgroup="ref",
         ), row=row, col=1)
+        # ALT: solid red on top
         fig.add_trace(go.Scatter(
-            x=x, y=alt_ds, name="ALT (T)", line=dict(color=COLOR_ALT, width=1),
+            x=x, y=alt_ds, name="ALT allele (T) — Alzheimer's risk",
+            line=dict(color=COLOR_ALT, width=1.5),
             showlegend=show_legend, legendgroup="alt",
         ), row=row, col=1)
 
@@ -105,20 +125,26 @@ def plot_ref_alt(variant_output, zoom_bp: int = 25000, bin_size: int = 32):
         else:
             add_track_pair(row_i, ref_dnase, alt_dnase, track_idx, show_legend)
 
-    # Variant line on all subplots
     for row_i in range(1, n_rows + 1):
         fig.add_vline(
             x=VARIANT_POS, line_dash="dash", line_color="#ffaa00",
             line_width=1, row=row_i, col=1,
         )
 
+    _add_bin1_annotation(fig, VARIANT_POS + 3000)
+
     fig.update_layout(
         title=dict(
-            text="BIN1 rs6733839 (chr2:127609280 C→T) — REF vs ALT",
-            font=dict(size=16),
+            text=(
+                "BIN1 rs6733839 (chr2:127,609,280 C→T) — Predicted Gene Expression: REF vs ALT"
+                "<br><sup>Grey dashed = reference allele (C) &nbsp;|&nbsp; "
+                "Red = Alzheimer's risk allele (T) &nbsp;|&nbsp; "
+                "Yellow line = variant position</sup>"
+            ),
+            font=dict(size=15),
         ),
         height=220 * n_rows,
-        margin=dict(l=60, r=30, t=80, b=40),
+        margin=dict(l=60, r=30, t=100, b=40),
     )
     _apply_dark_theme(fig)
     return fig
@@ -127,12 +153,12 @@ def plot_ref_alt(variant_output, zoom_bp: int = 25000, bin_size: int = 32):
 def plot_diff(variant_output, zoom_bp: int = 25000, bin_size: int = 32):
     """
     ALT − REF difference tracks for RNA-seq and DNase-seq.
-    Positive diff = red, negative diff = blue.
+    Pink = risk allele increases signal, blue = decreases signal.
     Returns a Plotly figure.
     """
     all_tracks = RNA_TRACKS + DNASE_TRACKS
     n_rows = len(all_tracks)
-    titles = [f"Δ {label} — {assay} (ALT − REF)" for _, label, assay in all_tracks]
+    titles = [f"Δ {label} — {assay}" for _, label, assay in all_tracks]
 
     fig = make_subplots(
         rows=n_rows,
@@ -153,11 +179,15 @@ def plot_diff(variant_output, zoom_bp: int = 25000, bin_size: int = 32):
         neg = np.where(diff < 0, diff, 0)
 
         fig.add_trace(go.Bar(
-            x=x, y=pos, name="ALT > REF", marker_color=COLOR_POS_DIFF,
+            x=x, y=pos,
+            name="Risk allele increases signal",
+            marker_color=COLOR_POS_DIFF,
             showlegend=(row == 1), legendgroup="pos",
         ), row=row, col=1)
         fig.add_trace(go.Bar(
-            x=x, y=neg, name="ALT < REF", marker_color=COLOR_NEG_DIFF,
+            x=x, y=neg,
+            name="Risk allele decreases signal",
+            marker_color=COLOR_NEG_DIFF,
             showlegend=(row == 1), legendgroup="neg",
         ), row=row, col=1)
 
@@ -172,7 +202,6 @@ def plot_diff(variant_output, zoom_bp: int = 25000, bin_size: int = 32):
         else:
             add_diff_track(row_i, ref_dnase, alt_dnase, track_idx)
 
-    # Zero line + variant line on all subplots
     for row_i in range(1, n_rows + 1):
         fig.add_hline(y=0, line_color=GRID_COLOR, line_width=1, row=row_i, col=1)
         fig.add_vline(
@@ -180,15 +209,22 @@ def plot_diff(variant_output, zoom_bp: int = 25000, bin_size: int = 32):
             line_width=1, row=row_i, col=1,
         )
 
+    _add_bin1_annotation(fig, VARIANT_POS + 3000)
+
     fig.update_layout(
         title=dict(
-            text="BIN1 rs6733839 — Effect of ALT Allele on Gene Expression (ALT − REF)",
-            font=dict(size=16),
+            text=(
+                "BIN1 rs6733839 — How the Alzheimer's Risk Allele Changes Brain Gene Expression (ALT − REF)"
+                "<br><sup>Pink = risk allele (T) increases signal &nbsp;|&nbsp; "
+                "Blue = risk allele suppresses signal &nbsp;|&nbsp; "
+                "Yellow line = variant position (chr2:127,609,280)</sup>"
+            ),
+            font=dict(size=15),
         ),
         barmode="overlay",
         bargap=0,
         height=220 * n_rows,
-        margin=dict(l=60, r=30, t=80, b=40),
+        margin=dict(l=60, r=30, t=100, b=40),
     )
     _apply_dark_theme(fig)
     return fig
